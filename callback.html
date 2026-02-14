@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NovaxMc - Authentifizierung...</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1a0a2e 0%, #2d1b4e 50%, #16213e 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: white;
+        }
+
+        .loading-container {
+            text-align: center;
+            background: rgba(35, 15, 55, 0.95);
+            border: 1px solid rgba(138, 43, 226, 0.4);
+            border-radius: 8px;
+            padding: 50px 60px;
+            box-shadow: 0 8px 32px rgba(138, 43, 226, 0.3);
+        }
+
+        .spinner {
+            width: 60px;
+            height: 60px;
+            border: 5px solid rgba(147, 112, 219, 0.3);
+            border-top: 5px solid #9370DB;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 30px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        h2 {
+            color: #9370DB;
+            margin-bottom: 15px;
+            font-size: 24px;
+        }
+
+        p {
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 14px;
+        }
+
+        .error {
+            color: #ff6b6b;
+        }
+
+        .error-icon {
+            font-size: 48px;
+            margin-bottom: 20px;
+        }
+
+        .retry-btn {
+            background: #5865F2;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            margin-top: 20px;
+            transition: background 0.2s;
+        }
+
+        .retry-btn:hover {
+            background: #4752C4;
+        }
+    </style>
+</head>
+<body>
+    <div class="loading-container" id="loading">
+        <div class="spinner"></div>
+        <h2>Discord Authentifizierung...</h2>
+        <p>Bitte warten, wir überprüfen deine Berechtigung</p>
+    </div>
+
+    <script src="config.js"></script>
+    <script>
+        // Hole Code aus URL
+        const urlParams = new URLSearchParams(window.location.search);
+        const code = urlParams.get('code');
+
+        if (!code) {
+            showError('Kein Autorisierungscode erhalten');
+        } else {
+            authenticateUser(code);
+        }
+
+        async function authenticateUser(code) {
+            try {
+                // Schritt 1: Tausche Code gegen Access Token
+                const tokenResponse = await fetch('https://discord.com/api/oauth2/token', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded'
+                    },
+                    body: new URLSearchParams({
+                        client_id: DISCORD_CONFIG.CLIENT_ID,
+                        client_secret: DISCORD_CONFIG.CLIENT_SECRET,
+                        grant_type: 'authorization_code',
+                        code: code,
+                        redirect_uri: DISCORD_CONFIG.REDIRECT_URI
+                    })
+                });
+
+                if (!tokenResponse.ok) {
+                    throw new Error('Token-Austausch fehlgeschlagen');
+                }
+
+                const tokenData = await tokenResponse.json();
+                const accessToken = tokenData.access_token;
+
+                // Schritt 2: Hole User Info
+                const userResponse = await fetch('https://discord.com/api/users/@me', {
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`
+                    }
+                });
+
+                if (!userResponse.ok) {
+                    throw new Error('Benutzerinformationen konnten nicht abgerufen werden');
+                }
+
+                const userData = await userResponse.json();
+
+                // Schritt 3: Hole Guild Member Info (Rollen)
+                const memberResponse = await fetch(
+                    `https://discord.com/api/users/@me/guilds/${DISCORD_CONFIG.GUILD_ID}/member`,
+                    {
+                        headers: {
+                            'Authorization': `Bearer ${accessToken}`
+                        }
+                    }
+                );
+
+                if (!memberResponse.ok) {
+                    showError('Du bist nicht auf dem NovaxMc Discord Server!');
+                    return;
+                }
+
+                const memberData = await memberResponse.json();
+                const userRoles = memberData.roles;
+
+                // Schritt 4: Check ob User eine erlaubte Rolle hat
+                const allowedRoleIds = Object.values(DISCORD_CONFIG.ALLOWED_ROLES);
+                const hasPermission = userRoles.some(roleId => allowedRoleIds.includes(roleId));
+
+                if (hasPermission) {
+                    // Speichere User-Daten im localStorage
+                    localStorage.setItem('user', JSON.stringify({
+                        id: userData.id,
+                        username: userData.username,
+                        discriminator: userData.discriminator,
+                        avatar: userData.avatar,
+                        roles: userRoles,
+                        accessToken: accessToken
+                    }));
+
+                    // Erfolgreiche Authentifizierung
+                    document.getElementById('loading').innerHTML = `
+                        <div style="font-size: 48px; margin-bottom: 20px;">✅</div>
+                        <h2 style="color: #43ff8b;">Authentifizierung erfolgreich!</h2>
+                        <p>Willkommen zurück, ${userData.username}!</p>
+                        <p style="margin-top: 10px;">Du wirst weitergeleitet...</p>
+                    `;
+
+                    setTimeout(() => {
+                        window.location.href = 'dashboard.html';
+                    }, 2000);
+                } else {
+                    showError('Du bist kein Teammitglied!', 'Du hast keine der erforderlichen Rollen: Supporter, Moderator, Developer, Admin, Teamleitung oder Owner');
+                }
+
+            } catch (error) {
+                console.error('Authentifizierungsfehler:', error);
+                showError('Authentifizierung fehlgeschlagen', error.message);
+            }
+        }
+
+        function showError(title, message = 'Bitte versuche es erneut oder kontaktiere einen Administrator') {
+            document.getElementById('loading').innerHTML = `
+                <div class="error-icon">❌</div>
+                <h2 class="error">${title}</h2>
+                <p>${message}</p>
+                <button class="retry-btn" onclick="window.location.href='index.html'">
+                    Zurück zur Anmeldung
+                </button>
+            `;
+        }
+    </script>
+</body>
+</html>
